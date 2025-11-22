@@ -3,12 +3,12 @@
 	<!-- 页面标题 -->
 	<view class="header">
 		<text class="page-title">待办事项</text>
-		<view class="sync-status" :class="syncStatus">
-			<text v-if="syncStatus === 'synced'" class="status-icon">✓</text>
-			<text v-else-if="syncStatus === 'syncing'" class="status-icon">⟳</text>
-			<text v-else class="status-icon">⚠</text>
+		<view class="sync-status" :class="onlineStatus">
+			<text v-if="onlineStatus === 'online'" class="status-icon">🌐</text>
+			<text v-else-if="onlineStatus === 'connecting'" class="status-icon">🔄</text>
+			<text v-else class="status-icon">📴</text>
 			<text class="status-text">
-				{{ syncStatus === 'synced' ? '已同步' : syncStatus === 'syncing' ? '同步中' : '未同步' }}
+				{{ onlineStatus === 'online' ? '在线' : onlineStatus === 'connecting' ? '连接中' : '离线' }}
 			</text>
 		</view>
 	</view>
@@ -79,7 +79,20 @@
 		
 		<!-- 添加任务按钮 -->
 		<view class="add-btn" @click="openAddTask">
-			+</view>
+			+
+		</view>
+		
+		<!-- 手动同步按钮组 -->
+		<view class="sync-buttons">
+			<view class="sync-btn pull-btn" @click="pullFromServer">
+				<text class="sync-btn-icon">↓</text>
+				<text class="sync-btn-text">拉取数据</text>
+			</view>
+			<view class="sync-btn push-btn" @click="pushToServer">
+				<text class="sync-btn-icon">↑</text>
+				<text class="sync-btn-text">手动同步</text>
+			</view>
+		</view>
 		
 		<!-- 添加/编辑任务弹窗 -->
 		<view class="popup-mask" v-if="showTaskDialog" @click="closeTaskDialog"></view>
@@ -119,73 +132,82 @@ import websocketManager from '@/utils/websocketManager';
 
 export default {
 		data() {
-				return {
-					categories: ['任务', '想尝试', '提醒'],
-					currentCategory: '任务',
-					tasks: [],
-					localTasks: [],
-					showCompleted: false,
-					showTaskDialog: false,
-					editingTask: false,
-					syncStatus: 'synced', // synced, syncing, unsynced
-					currentTask: {
-						id: null,
-						title: '',
-						content: '',
-						category: '任务'
-					},
-					// WebSocket相关状态
-					wsConnected: false,
-					// 请求ID映射，用于处理响应
-					pendingRequests: {}
-				}
-			},
-		computed: {
-			filteredTasks() {
-				return this.tasks.filter(task => task.category === this.currentCategory);
+			return {
+				categories: ['任务', '想尝试', '提醒'],
+				currentCategory: '任务',
+				tasks: [],
+				localTasks: [],
+				showCompleted: false,
+				showTaskDialog: false,
+				editingTask: false,
+				onlineStatus: 'offline', // online, offline, connecting
+				currentTask: {
+					id: null,
+					title: '',
+					content: '',
+					category: '任务'
+				},
+				// WebSocket相关状态
+				wsConnected: false,
+				// 请求ID映射，用于处理响应
+				pendingRequests: {}
 			}
 		},
-		onLoad() {
-			// 先从本地存储加载任务
-			this.loadLocalTasks();
+	computed: {
+		filteredTasks() {
+			return this.tasks.filter(task => task.category === this.currentCategory);
+		}
+	},
+	onLoad() {
+		// 先从本地存储加载任务
+		this.loadLocalTasks();
+		
+		// 初始化WebSocket连接
+		this.initWebSocket();
+		
+		// 页面显示时也重新加载任务
+	},
+	onShow() {
+		// 页面显示时不再自动获取任务，改为手动模式
+		this.loadLocalTasks();
+	},
+	
+	// 页面隐藏时清理定时器
+	onHide() {
+		this.stopAutoSyncCheck();
+	},
+	
+	// 页面卸载时清理所有资源
+	onUnload() {
+		this.stopAutoSyncCheck();
+		// 页面卸载时清理WebSocket连接
+		websocketManager.close();
+	},
+	methods: {
+		// 初始化WebSocket连接
+		initWebSocket() {
+			let wsUrl;
+			
+			// 根据平台选择连接方式
+			// #ifdef H5
+			const hostname = window.location.hostname;
+			wsUrl = `http://${hostname}:5000`;
+			
+			console.log('尝试连接Socket.IO服务器:', wsUrl);
 			
 			// 初始化WebSocket连接
-			this.initWebSocket();
+			websocketManager.init(wsUrl);
+			// #endif
 			
-			// 页面显示时也重新加载任务
-		},
-		onShow() {
-			// 如果WebSocket已连接，获取最新任务
-			if (this.wsConnected) {
-				this.fetchTasks();
-			}
-			// 页面显示时启动自动同步检查
-			this.startAutoSyncCheck();
-		},
-		
-		// 页面隐藏时清理定时器
-		onHide() {
-			this.stopAutoSyncCheck();
-		},
-		
-		// 页面卸载时清理所有资源
-		onUnload() {
-			this.stopAutoSyncCheck();
-			// 页面卸载时清理WebSocket连接
-			websocketManager.close();
-		},
-		methods: {
+			// #ifndef H5
+			// 在 App 环境下使用 HTTP 地址（websocketManager 会自动转换为 Socket.IO 格式）
+			wsUrl = 'http://192.168.1.7:5000';
+			
+			console.log('App环境，连接Socket.IO服务器:', wsUrl);
+			
 			// 初始化WebSocket连接
-			initWebSocket() {
-				// 在H5环境下，直接连接到Flask服务器的Socket.IO端点
-				// 使用 Socket.IO 客户端格式
-				const hostname = window.location.hostname;
-				const wsUrl = `http://${hostname}:5000`;
-				
-				console.log('尝试连接Socket.IO服务器:', wsUrl);
-				
-				// 初始化WebSocket连接
-				websocketManager.init(wsUrl);
+			websocketManager.init(wsUrl);
+			// #endif
 				
 				// 添加事件监听器
 				websocketManager.on('connected', this.handleWsConnected);
@@ -203,62 +225,38 @@ export default {
 			handleWsConnected() {
 				console.log('WebSocket连接成功');
 				this.wsConnected = true;
-				this.syncStatus = 'syncing';
-				
-				// 连接成功后立即获取最新任务
-				this.fetchTasks();
+				this.onlineStatus = 'online';
 			},
 			
 			// 处理WebSocket连接断开
 			handleWsDisconnected() {
 				console.log('WebSocket连接断开');
 				this.wsConnected = false;
-				this.syncStatus = 'unsynced';
+				this.onlineStatus = 'offline';
 			},
 			
-			// 处理任务数据更新
+			// 处理任务数据更新 - 拉取模式：完全替换本地数据
 			handleTasksData(data) {
 				try {
-					// 处理服务器返回的数据，合并本地未同步的任务
 					const serverTasks = Array.isArray(data.tasks) ? data.tasks : [];
-					const localUnsyncedTasks = this.tasks.filter(task => task.needsSync);
 					
-					// 合并策略：本地未同步的任务优先级高于服务器任务
-					// 1. 创建服务器任务ID映射
-					const serverTaskMap = {};
-					serverTasks.forEach(task => {
-						// 确保task.id是字符串类型
-						const taskId = String(task.id);
-						if (!taskId.startsWith('temp_')) {
-							serverTaskMap[taskId] = task;
-						}
+					// 直接用服务器数据替换本地数据，确保所有任务都标记为已同步
+					this.tasks = serverTasks.map(task => ({
+						...task,
+						id: String(task.id), // 确保ID是字符串
+						needsSync: false // 服务器数据标记为已同步
+					}));
+					
+					this.saveLocalTasks(); // 保存到本地存储
+					this.onlineStatus = 'online'; // 状态恢复为在线
+					
+					uni.showToast({
+						title: '拉取数据成功',
+						icon: 'success'
 					});
-					
-					// 2. 合并任务，保留本地未同步的任务
-					const mergedTasks = [...localUnsyncedTasks];
-					
-					// 3. 添加服务器任务，但如果本地有同名ID且未同步的任务则跳过
-					serverTasks.forEach(task => {
-						// 确保task.id是字符串类型
-						const taskId = String(task.id);
-						if (!mergedTasks.some(t => String(t.id) === taskId)) {
-							mergedTasks.push({
-								...task,
-								id: taskId, // 确保ID是字符串
-								needsSync: false // 服务器任务默认已同步
-							});
-						}
-					});
-					
-					this.tasks = mergedTasks;
-					this.saveLocalTasks(); // 保存合并后的数据到本地
-					this.syncStatus = 'synced';
-					
-					// 尝试同步未同步的任务
-					this.syncUnsyncedTasks();
 				} catch (error) {
 					console.error('处理任务数据失败:', error);
-					this.syncStatus = 'unsynced';
+					this.onlineStatus = 'offline';
 				} finally {
 					uni.hideLoading();
 				}
@@ -286,7 +284,7 @@ export default {
 					}
 					// 检查是否所有任务都已同步
 					if (!this.tasks.some(t => t.needsSync)) {
-						this.syncStatus = 'synced';
+						// 任务同步完成，但保持在线状态不变
 					}
 				} catch (error) {
 					console.error('处理任务创建响应失败:', error);
@@ -311,7 +309,7 @@ export default {
 					}
 					// 检查是否所有任务都已同步
 					if (!this.tasks.some(t => t.needsSync)) {
-						this.syncStatus = 'synced';
+						// 任务同步完成，但保持在线状态不变
 					}
 				} catch (error) {
 					console.error('处理任务更新响应失败:', error);
@@ -329,7 +327,7 @@ export default {
 					}
 					// 检查是否所有任务都已同步
 					if (!this.tasks.some(t => t.needsSync)) {
-						this.syncStatus = 'synced';
+						// 任务同步完成，但保持在线状态不变
 					}
 				} catch (error) {
 					console.error('处理任务删除响应失败:', error);
@@ -354,7 +352,7 @@ export default {
 					}
 					// 检查是否所有任务都已同步
 					if (!this.tasks.some(t => t.needsSync)) {
-						this.syncStatus = 'synced';
+						// 任务同步完成，但保持在线状态不变
 					}
 				} catch (error) {
 					console.error('处理任务完成状态更新响应失败:', error);
@@ -364,19 +362,116 @@ export default {
 			// 处理批量同步完成
 			handleSyncCompleted(data) {
 				console.log('批量同步完成');
-				this.syncStatus = 'synced';
+				// 同步状态管理已改为在线状态管理
 				this.saveLocalTasks();
 			},
 			
 			// 处理WebSocket错误
 			handleWsError(error) {
 				console.error('WebSocket错误:', error);
-				this.syncStatus = 'unsynced';
+				// 同步状态管理已改为在线状态管理
 			},
 			
 			// 生成请求ID
 			generateRequestId() {
 				return 'req_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+			},
+			
+			// 从服务器拉取数据
+			pullFromServer() {
+				if (!this.wsConnected) {
+					uni.showToast({
+						title: '未连接到服务器',
+						icon: 'none'
+					});
+					return;
+				}
+				
+				this.onlineStatus = 'connecting';
+				uni.showLoading({ title: '拉取数据中...' });
+				
+				// 使用WebSocket发送获取任务请求
+				websocketManager.send('fetch_tasks');
+				
+				// 设置超时处理
+				setTimeout(() => {
+					if (this.onlineStatus === 'connecting') {
+						console.warn('拉取数据超时');
+						this.onlineStatus = 'offline';
+						uni.hideLoading();
+						uni.showToast({
+							title: '拉取数据超时',
+							icon: 'none'
+						});
+					}
+				}, 10000);
+			},
+			
+			// 手动同步到服务器 - 完全替换模式
+			pushToServer() {
+				if (!this.wsConnected) {
+					uni.showToast({
+						title: '未连接到服务器',
+						icon: 'none'
+					});
+					return;
+				}
+				
+				if (this.tasks.length === 0) {
+					uni.showToast({
+						title: '没有任务可以同步',
+						icon: 'success'
+					});
+					return;
+				}
+				
+				this.onlineStatus = 'connecting';
+				uni.showLoading({ title: '同步数据中...' });
+				
+				// 先清空服务器上的所有数据
+				websocketManager.send('clear_all_tasks');
+				
+				// 然后批量发送本地所有任务
+				this.tasks.forEach((task, index) => {
+					setTimeout(() => {
+						const taskToSend = {
+							title: task.title,
+							content: task.content,
+							category: task.category,
+							completed: task.completed
+						};
+						
+						if (task.id && task.id.startsWith('temp_')) {
+							// 临时任务，创建新任务
+							websocketManager.send('create_task', { task: taskToSend });
+						} else {
+							// 已有ID的任务，更新任务
+							websocketManager.send('update_task', {
+								id: task.id,
+								task: taskToSend
+							});
+						}
+						
+						// 最后一个任务
+						if (index === this.tasks.length - 1) {
+							setTimeout(() => {
+								uni.hideLoading();
+								uni.showToast({
+									title: '同步完成',
+									icon: 'success'
+								});
+								this.onlineStatus = 'online';
+								
+								// 标记所有任务为已同步
+								this.tasks = this.tasks.map(task => ({
+									...task,
+									needsSync: false
+								}));
+								this.saveLocalTasks();
+							}, 1000);
+						}
+					}, index * 100); // 每个任务间隔100ms发送
+				});
 			},
 			
 			// 从本地存储加载任务 - 增强的持久化实现
@@ -409,11 +504,9 @@ export default {
 									// 更新最后加载时间
 									this.lastLoadTime = localData.lastSyncTime || Date.now();
 									
-									// 检查是否有需要同步的任务
-									const hasUnsyncedTasks = this.tasks.some(task => task.needsSync);
-									if (hasUnsyncedTasks) {
-										this.syncStatus = 'unsynced';
-									}
+// 检查是否有需要同步的任务
+					const hasUnsyncedTasks = this.tasks.some(task => task.needsSync);
+					// 在线状态检查由连接状态决定，不在这里设置
 								} else {
 									console.error('本地任务数据格式错误，应为数组');
 									this.tasks = [];
@@ -609,7 +702,7 @@ export default {
 					
 					// 更新同步状态
 					if (this.syncStatus === 'synced') {
-						this.syncStatus = 'unsynced';
+						// 同步状态管理已改为在线状态管理
 					}
 				} catch (e) {
 					console.error('保存本地任务失败:', e);
@@ -783,7 +876,7 @@ export default {
 			},
 			// 获取任务列表 (WebSocket版本)
 			fetchTasks() {
-				this.syncStatus = 'syncing';
+				this.onlineStatus = 'connecting';
 				uni.showLoading({ title: '加载中...' });
 				
 				// 使用WebSocket发送获取任务请求
@@ -791,13 +884,13 @@ export default {
 				
 				// 设置超时处理
 				setTimeout(() => {
-					if (this.syncStatus === 'syncing') {
+					if (this.onlineStatus === 'connecting') {
 						console.warn('获取任务超时，使用本地数据');
 						// 超时后使用本地数据
 						if (this.localTasks && this.localTasks.length > 0) {
 							this.tasks = [...this.localTasks];
 						}
-						this.syncStatus = 'unsynced';
+						// 同步状态管理已改为在线状态管理
 						try {
 							uni.hideLoading();
 						} catch (e) {
@@ -833,7 +926,7 @@ export default {
 			// 检查后端连接状态 (WebSocket版本)
 			checkBackendConnection() {
 				// 使用WebSocket连接状态检查
-				if (this.syncStatus === 'unsynced' && 
+				if (this.tasks.some(task => task.needsSync) && 
 					this.tasks.some(task => task.needsSync) && 
 					this.wsConnected) {
 					// WebSocket已连接，尝试同步未同步的任务
@@ -844,18 +937,19 @@ export default {
 			// 同步所有未同步的任务
 			syncUnsyncedTasks() {
 				// 只有当状态不是正在同步时才开始同步
-				if (this.syncStatus === 'syncing') {
+				if (this.onlineStatus === 'connecting') {
 					return;
 				}
 				
 				const unsyncedTasks = this.tasks.filter(task => task.needsSync);
 				if (unsyncedTasks.length === 0) {
-					this.syncStatus = 'synced';
+					// 同步状态管理已改为在线状态管理
 					return;
 				}
 				
 				console.log(`开始同步${unsyncedTasks.length}个未同步任务`);
-				this.syncStatus = 'syncing';
+				this.onlineStatus = 'connecting';
+				uni.showLoading({ title: '同步中...' });
 				
 				// 逐个同步任务，避免并发请求过多
 				let syncIndex = 0;
@@ -863,8 +957,13 @@ export default {
 					if (syncIndex >= unsyncedTasks.length) {
 						// 所有任务同步完成
 						console.log('所有任务同步完成');
-						this.syncStatus = 'synced';
+						// 同步状态管理已改为在线状态管理
 						this.saveLocalTasks();
+						uni.hideLoading();
+						uni.showToast({
+							title: '同步完成',
+							icon: 'success'
+						});
 						return;
 					}
 					
@@ -942,8 +1041,8 @@ export default {
 							};
 							this.saveLocalTasks(); // 立即保存到本地存储
 							
-							// 然后尝试同步到后端
-							this.syncTaskToServer(this.tasks[index], 'PUT');
+							// 标记为未同步状态，等待手动同步
+							// 同步状态管理已改为在线状态管理
 						}
 					} else {
 						// 添加任务 - 先生成临时ID并保存到本地
@@ -955,12 +1054,12 @@ export default {
 						this.tasks.push(newTask);
 						this.saveLocalTasks(); // 立即保存到本地存储
 						
-						// 然后尝试同步到后端
-						this.syncTaskToServer(newTask, 'POST');
+						// 标记为未同步状态，等待手动同步
+						// 同步状态管理已改为在线状态管理
 					}
 					
 					uni.showToast({
-						title: isEdit ? '任务已更新（可能需要稍后同步）' : '任务已添加（可能需要稍后同步）',
+						title: isEdit ? '任务已更新（需要手动同步）' : '任务已添加（需要手动同步）',
 						icon: 'success'
 					});
 					this.closeTaskDialog();
@@ -1016,7 +1115,7 @@ export default {
 						if (this.pendingRequests[requestId]) {
 							console.error(`任务${taskId}同步超时`);
 							delete this.pendingRequests[requestId];
-							this.syncStatus = 'unsynced';
+							// 同步状态管理已改为在线状态管理
 							reject(new Error('Sync timeout'));
 						}
 					}, 5000);
@@ -1041,12 +1140,12 @@ export default {
 						};
 						this.saveLocalTasks(); // 立即保存到本地存储
 						
-						// 然后尝试同步到后端
-						this.syncTaskCompletionToServer(task.id, newCompletedState);
+						// 标记为未同步状态，等待手动同步
+						// 同步状态管理已改为在线状态管理
 					}
 					
 					uni.showToast({
-						title: '任务状态已更新（可能需要稍后同步）',
+						title: '任务状态已更新（需要手动同步）',
 						icon: 'success'
 					});
 				} catch (error) {
@@ -1082,7 +1181,7 @@ export default {
 					if (this.pendingRequests[requestId]) {
 						console.error(`任务完成状态更新超时: ${taskIdStr}`);
 						delete this.pendingRequests[requestId];
-						this.syncStatus = 'unsynced';
+						// 同步状态管理已改为在线状态管理
 					}
 				}, 5000);
 			},
@@ -1107,13 +1206,11 @@ export default {
 								this.tasks = this.tasks.filter(task => task.id !== taskId);
 								this.saveLocalTasks(); // 保存到本地存储
 								
-								// 然后尝试从服务器删除（如果不是临时任务ID）
-								if (taskToDelete && !taskToDelete.id.startsWith('temp_')) {
-									this.syncTaskDeletionToServer(taskId);
-								}
+								// 标记为未同步状态，等待手动同步
+								// 同步状态管理已改为在线状态管理
 								
 								uni.showToast({
-									title: '任务已删除（可能需要稍后同步）',
+									title: '任务已删除（需要手动同步）',
 									icon: 'success'
 								});
 							} catch (error) {
@@ -1151,7 +1248,7 @@ export default {
 					if (this.pendingRequests[requestId]) {
 						console.error(`任务删除超时: ${taskIdStr}`);
 						delete this.pendingRequests[requestId];
-						this.syncStatus = 'unsynced';
+						// 同步状态管理已改为在线状态管理
 					}
 				}, 5000);
 			}
@@ -1182,27 +1279,27 @@ export default {
 		background-color: #f5f5f5;
 		font-size: 24rpx;
 	}
-	.sync-status.synced {
+	.sync-status.online {
 		background-color: #e6f7e9;
 	}
-	.sync-status.syncing {
+	.sync-status.connecting {
 		background-color: #e6f4ff;
 	}
-	.sync-status.unsynced {
+	.sync-status.offline {
 		background-color: #fff7e6;
 	}
 	.status-icon {
 		margin-right: 8rpx;
 		font-size: 28rpx;
 	}
-	.sync-status.synced .status-icon {
+	.sync-status.online .status-icon {
 		color: #52c41a;
 	}
-	.sync-status.syncing .status-icon {
+	.sync-status.connecting .status-icon {
 		color: #1890ff;
 		animation: rotate 1.5s linear infinite;
 	}
-	.sync-status.unsynced .status-icon {
+	.sync-status.offline .status-icon {
 		color: #faad14;
 	}
 	.status-text {
@@ -1387,6 +1484,56 @@ export default {
 		color: #fff;
 		z-index: 999;
 		cursor: pointer;
+	}
+
+	/* 同步按钮组样式 */
+	.sync-buttons {
+		position: fixed;
+		bottom: 170rpx;
+		right: 30rpx;
+		display: flex;
+		flex-direction: column;
+		gap: 15rpx;
+		z-index: 998;
+	}
+
+	.sync-btn {
+		display: flex;
+		align-items: center;
+		padding: 12rpx 20rpx;
+		border-radius: 25rpx;
+		background-color: #fff;
+		box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.15);
+		font-size: 24rpx;
+		min-width: 140rpx;
+		transition: all 0.3s ease;
+	}
+
+	.sync-btn:active {
+		transform: scale(0.95);
+	}
+
+	.pull-btn {
+		background-color: #e6f4ff;
+		border: 2rpx solid #1890ff;
+		color: #1890ff;
+	}
+
+	.push-btn {
+		background-color: #f6ffed;
+		border: 2rpx solid #52c41a;
+		color: #52c41a;
+	}
+
+	.sync-btn-icon {
+		font-size: 28rpx;
+		margin-right: 8rpx;
+		font-weight: bold;
+	}
+
+	.sync-btn-text {
+		font-size: 24rpx;
+		font-weight: 500;
 	}
 
 	/* 弹窗样式 */

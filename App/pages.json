@@ -8,6 +8,15 @@
 				"navigationBarTextStyle": "black",
 				"enablePullDownRefresh": false
 			}
+		},
+		{
+			"path": "pages/index/index-debug",
+			"style": {
+				"navigationBarTitleText": "调试页面",
+				"navigationBarBackgroundColor": "#ffffff",
+				"navigationBarTextStyle": "black",
+				"enablePullDownRefresh": false
+			}
 		}
 	],
 	"globalStyle": {

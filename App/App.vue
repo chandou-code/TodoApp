@@ -2,6 +2,10 @@
 export default {
 	onLaunch: function() {
 		console.log('App Launch')
+		// 添加全局错误处理
+		uni.onError((error) => {
+			console.error('全局错误:', error)
+		})
 	},
 	onShow: function() {
 		console.log('App Show')

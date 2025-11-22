@@ -13,7 +13,12 @@ class WebSocketManager {
     this.messageQueue = []; // 未发送的消息队列
     this.listeners = {}; // 事件监听器
     this.url = ''; // WebSocket服务器地址
-    this.isH5 = process.env.VUE_APP_PLATFORM === 'h5' || typeof window !== 'undefined';
+    // #ifdef H5
+    this.isH5 = true;
+    // #endif
+    // #ifndef H5
+    this.isH5 = false;
+    // #endif
   }
 
   /**
@@ -47,8 +52,8 @@ class WebSocketManager {
         // H5环境：尝试使用Socket.IO客户端
         this.connectSocketIO();
       } else {
-        // 非H5环境：使用uni-app的WebSocket API
-        this.connectUniSocket();
+        // 非H5环境：使用原生WebSocket
+        this.connectNativeWebSocket();
       }
     } catch (e) {
       console.error('创建WebSocket连接失败:', e);
@@ -71,7 +76,7 @@ class WebSocketManager {
       }
     } catch (e) {
       console.error('Socket.IO连接失败:', e);
-      this.fallbackToUniSocket();
+      this.fallbackToNativeWebSocket();
     }
   }
 
@@ -79,14 +84,22 @@ class WebSocketManager {
    * 加载Socket.IO客户端库
    */
   loadSocketIOScript(callback) {
+    // #ifdef H5
     const script = document.createElement('script');
     script.src = 'https://cdn.socket.io/4.7.2/socket.io.min.js';
     script.onload = callback;
     script.onerror = () => {
-      console.error('加载Socket.IO客户端库失败，回退到uni-app WebSocket');
-      this.fallbackToUniSocket();
+      console.error('加载Socket.IO客户端库失败，回退到原生WebSocket');
+      this.fallbackToNativeWebSocket();
     };
     document.head.appendChild(script);
+    // #endif
+    
+    // #ifndef H5
+    // App 环境下不支持动态加载脚本，直接使用原生WebSocket
+    console.log('App环境，使用原生WebSocket');
+    this.fallbackToNativeWebSocket();
+    // #endif
   }
 
   /**
@@ -127,7 +140,7 @@ class WebSocketManager {
       this.setupSocketIOEvents();
     } catch (e) {
       console.error('初始化Socket.IO连接失败:', e);
-      this.fallbackToUniSocket();
+      this.fallbackToNativeWebSocket();
     }
   }
 
@@ -149,19 +162,64 @@ class WebSocketManager {
   }
 
   /**
-   * 回退到uni-app WebSocket API
+   * 回退到原生WebSocket
    */
-  fallbackToUniSocket() {
-    console.log('回退到uni-app WebSocket API');
-    this.connectUniSocket();
+  fallbackToNativeWebSocket() {
+    console.log('回退到原生WebSocket');
+    this.connectNativeWebSocket();
   }
 
   /**
-   * 使用uni-app WebSocket API连接
+   * 使用原生WebSocket连接
    */
-  connectUniSocket() {
+  connectNativeWebSocket() {
+    let wsUrl = this.url.replace('http://', 'ws://').replace('https://', 'wss://');
+    if (wsUrl.includes(':5000')) {
+      wsUrl = wsUrl.replace(':5000', ':5001'); // 使用原生WebSocket端口
+    }
+    
+    console.log('使用原生WebSocket:', wsUrl);
+    
+    // #ifdef H5
+    // H5环境使用浏览器WebSocket API
+    this.socket = new WebSocket(wsUrl);
+    
+    this.socket.onopen = () => {
+      console.log('WebSocket连接已建立');
+      this.isConnected = true;
+      this.emit('connected', { message: '连接成功' });
+      this.startHeartbeat();
+      this.flushMessageQueue();
+    };
+    
+    this.socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        this.handleNativeMessage(message);
+      } catch (e) {
+        console.error('解析WebSocket消息失败:', e);
+      }
+    };
+    
+    this.socket.onclose = () => {
+      console.log('WebSocket连接已关闭');
+      this.isConnected = false;
+      this.emit('disconnected', { message: '连接已关闭' });
+      this.stopHeartbeat();
+      this.handleReconnect();
+    };
+    
+    this.socket.onerror = (err) => {
+      console.error('WebSocket连接错误:', err);
+      this.isConnected = false;
+      this.emit('error', { error: err.message });
+    };
+    // #endif
+    
+    // #ifndef H5
+    // App环境使用uni-app WebSocket API
     this.socket = uni.connectSocket({
-      url: this.url,
+      url: wsUrl,
       success: () => {
         console.log('WebSocket连接请求已发送');
       },
@@ -184,7 +242,7 @@ class WebSocketManager {
     this.socket.onMessage((res) => {
       try {
         const message = JSON.parse(res.data);
-        this.handleMessage(message);
+        this.handleNativeMessage(message);
       } catch (e) {
         console.error('解析WebSocket消息失败:', e);
       }
@@ -205,22 +263,25 @@ class WebSocketManager {
       this.isConnected = false;
       this.emit('error', { error: err });
     });
+    // #endif
   }
 
   /**
-   * 处理重连
+   * 处理原生WebSocket消息
    */
-  handleReconnect() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
+  handleNativeMessage(message) {
+    const { type, data } = message;
+    
+    console.log('收到原生WebSocket消息:', type, data);
+    
+    // 处理心跳响应
+    if (type === 'pong') {
+      console.log('接收到心跳响应');
+      return;
     }
     
-    this.reconnectTimer = setTimeout(() => {
-      if (!this.isConnected) {
-        console.log('尝试重新连接WebSocket...');
-        this.connect();
-      }
-    }, this.reconnectInterval);
+    // 触发对应的事件监听器，传递完整的数据
+    this.emit(type, data);
   }
 
   /**
@@ -235,16 +296,24 @@ class WebSocketManager {
       this.socket.emit(type, payload, requestId ? requestId : null);
       console.log('Socket.IO消息发送成功:', type);
     } else if (this.socket) {
-      // uni-app WebSocket发送
+      // 原生WebSocket发送
       const message = {
         type,
-        payload,
+        data: payload,
         requestId
       };
 
       if (this.isConnected && this.socket.send) {
+        const messageStr = JSON.stringify(message);
+        
+        // #ifdef H5
+        this.socket.send(messageStr);
+        console.log('WebSocket消息发送成功:', type);
+        // #endif
+        
+        // #ifndef H5
         this.socket.send({
-          data: JSON.stringify(message),
+          data: messageStr,
           success: () => {
             console.log('WebSocket消息发送成功:', type);
           },
@@ -253,6 +322,7 @@ class WebSocketManager {
             this.queueMessage(message);
           }
         });
+        // #endif
       } else {
         console.log('WebSocket未连接，将消息加入队列');
         this.queueMessage(message);
@@ -290,28 +360,33 @@ class WebSocketManager {
         // Socket.IO发送队列消息
         this.socket.emit(message.type, message.payload, message.requestId);
         console.log('队列消息发送成功:', message.type);
-        // 继续发送下一个消息
         sendNext();
       } else if (this.socket && this.socket.send) {
-        // uni-app WebSocket发送队列消息
+        // 原生WebSocket发送队列消息
+        const messageStr = JSON.stringify(message);
+        
+        // #ifdef H5
+        this.socket.send(messageStr);
+        console.log('队列消息发送成功:', message.type);
+        sendNext();
+        // #endif
+        
+        // #ifndef H5
         this.socket.send({
-          data: JSON.stringify(message),
+          data: messageStr,
           success: () => {
             console.log('队列消息发送成功:', message.type);
-            // 继续发送下一个消息
             sendNext();
           },
           fail: (err) => {
             console.error('队列消息发送失败:', err);
-            // 将失败的消息重新加入队列
             this.messageQueue.unshift(message);
-            // 停止发送，等待下一次重连
           }
         });
+        // #endif
       }
     };
 
-    // 开始发送队列消息
     sendNext();
   }
 
@@ -339,20 +414,19 @@ class WebSocketManager {
   }
 
   /**
-   * 处理接收到的消息
-   * @param {object} message - 消息对象
+   * 处理重连
    */
-  handleMessage(message) {
-    const { type, payload } = message;
-    
-    // 处理心跳响应
-    if (type === 'pong') {
-      console.log('接收到心跳响应');
-      return;
+  handleReconnect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
     }
     
-    // 触发对应的事件监听器
-    this.emit(type, payload);
+    this.reconnectTimer = setTimeout(() => {
+      if (!this.isConnected) {
+        console.log('尝试重新连接WebSocket...');
+        this.connect();
+      }
+    }, this.reconnectInterval);
   }
 
   /**
@@ -415,7 +489,7 @@ class WebSocketManager {
         // Socket.IO关闭
         this.socket.disconnect();
       } else if (this.socket.close) {
-        // uni-app WebSocket关闭
+        // 原生WebSocket关闭
         this.socket.close();
       }
       this.socket = null;

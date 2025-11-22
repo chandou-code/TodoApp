@@ -1,6 +1,6 @@
 {
-    "name" : "跨平台待办事项",
-    "appid" : "__UNI__8081B5B",
+    "name" : "ToDoApp",
+    "appid" : "__UNI__F0B0C59",
     "description" : "",
     "versionName" : "1.0.0",
     "versionCode" : "100",
@@ -16,31 +16,6 @@
             "autoclose" : true,
             "delay" : 0
         },
-        /* HTTP 支持配置 */
-        "ssl" : {
-            "http" : "all"
-        },
-        "networkSecurity" : {
-            "config" : "custom",
-            "custom" : {
-                "domains" : {
-                    "*" : [
-                        "192.168.1.7", // 您的局域网IP
-                        "192.168.1.*", // 整个局域网段
-                        "10.*.*.*",
-                        "localhost",
-                        "127.0.0.1",
-                        "*.test.com"
-                    ]
-                }
-            }
-        },
-        /* Android 9+ HTTP 支持 */
-        "android" : {
-            "networkSecurity" : {
-                "cleartextTraffic" : true
-            }
-        },
         /* 模块配置 */
         "modules" : {},
         /* 应用发布信息 */
@@ -48,35 +23,26 @@
             /* android打包配置 */
             "android" : {
                 "permissions" : [
-                    "<uses-permission android:name=\"android.permission.INTERNET\"/>",
-                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
-                    "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.CHANGE_NETWORK_STATE\"/>",
-                    "<uses-permission android:name=\"android.permission.CHANGE_WIFI_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.MOUNT_UNMOUNT_FILESYSTEMS\"/>",
                     "<uses-permission android:name=\"android.permission.VIBRATE\"/>",
                     "<uses-permission android:name=\"android.permission.READ_LOGS\"/>",
+                    "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
                     "<uses-feature android:name=\"android.hardware.camera.autofocus\"/>",
+                    "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.CAMERA\"/>",
                     "<uses-permission android:name=\"android.permission.GET_ACCOUNTS\"/>",
                     "<uses-permission android:name=\"android.permission.READ_PHONE_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.CHANGE_WIFI_STATE\"/>",
                     "<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>",
                     "<uses-permission android:name=\"android.permission.FLASHLIGHT\"/>",
                     "<uses-feature android:name=\"android.hardware.camera\"/>",
                     "<uses-permission android:name=\"android.permission.WRITE_SETTINGS\"/>"
-                ],
-                /* 可选：自定义启动图等配置 */
-                "style" : {
-                    "android:windowIsTranslucent" : "true"
-                }
+                ]
             },
             /* ios打包配置 */
             "ios" : {
-                "dSYMs" : false,
-                /* iOS HTTP 支持 */
-                "NSAppTransportSecurity" : {
-                    "NSAllowsArbitraryLoads" : true
-                }
+                "dSYMs" : false
             },
             /* SDK配置 */
             "sdkConfigs" : {}
@@ -84,55 +50,22 @@
     },
     /* 快应用特有相关 */
     "quickapp" : {},
-    /* h5配置 - 开发环境代理 */
-    "h5" : {
-        "devServer" : {
-            "host" : "0.0.0.0", // 允许局域网访问H5调试页面
-            "port" : 8080,
-            "disableHostCheck" : true, // 禁用主机检查
-            "proxy" : {
-                "/api" : {
-                    "target" : "http://192.168.1.7:5000", // 指向您的Flask服务
-                    "changeOrigin" : true,
-                    "secure" : false,
-                    "pathRewrite" : {
-                        "^/api" : "/api"
-                    },
-                    "logLevel" : "debug" // 可选：查看代理日志
-                }
-            }
-        },
-        /* 生产环境配置 */
-        "publicPath" : "./",
-        "router" : {
-            "mode" : "hash"
-        }
-    },
     /* 小程序特有相关 */
     "mp-weixin" : {
         "appid" : "",
         "setting" : {
-            "urlCheck" : false // 关闭域名校验
+            "urlCheck" : false
         },
         "usingComponents" : true
     },
     "mp-alipay" : {
-        "usingComponents" : true,
-        "setting" : {
-            "urlCheck" : false
-        }
+        "usingComponents" : true
     },
     "mp-baidu" : {
-        "usingComponents" : true,
-        "setting" : {
-            "urlCheck" : false
-        }
+        "usingComponents" : true
     },
     "mp-toutiao" : {
-        "usingComponents" : true,
-        "setting" : {
-            "urlCheck" : false
-        }
+        "usingComponents" : true
     },
     "uniStatistics" : {
         "enable" : false
