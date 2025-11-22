@@ -1,0 +1,26 @@
+{
+  "name": "todo-app",
+  "version": "1.0.0",
+  "description": "待办事项应用",
+  "scripts": {
+    "dev:h5": "uni",
+    "build:h5": "uni build",
+    "dev:mp-weixin": "uni -p mp-weixin",
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "dev:mp-alipay": "uni -p mp-alipay",
+    "build:mp-alipay": "uni build -p mp-alipay",
+    "lint": "echo 'Linting not configured yet'",
+    "test": "echo 'Frontend tests not configured yet'"
+  },
+  "dependencies": {
+    "@dcloudio/uni-ui": "^1.4.22"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "^3.3.23"
+  },
+  "uni-app": {
+    "scripts": {
+      "beforeCompile": ""
+    }
+  }
+}
