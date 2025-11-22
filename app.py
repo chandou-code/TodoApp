@@ -76,7 +76,7 @@ EMAIL_CONFIG = {
     'smtp_server': 'smtp.qq.com',
     'port': 587,
     'username': '1071718696@qq.com',
-    'password': 'czxzcmubbpelbcgh',
+    'password': 'xxxxxxxx',
     'sender': '1071718696@qq.com',
     'recipient': '1071718696@qq.com'
 }
@@ -724,4 +724,5 @@ def broadcast_task_change(action, task_data):
 # 启动应用
 if __name__ == '__main__':
     # 使用socketio.run替代app.run
+
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
