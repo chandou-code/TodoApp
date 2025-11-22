@@ -75,10 +75,10 @@ with app.app_context():
 EMAIL_CONFIG = {
     'smtp_server': 'smtp.qq.com',
     'port': 587,
-    'username': '1071718696@qq.com',
+    'username': 'xxxxxxxx@qq.com',
     'password': 'xxxxxxxx',
-    'sender': '1071718696@qq.com',
-    'recipient': '1071718696@qq.com'
+    'sender': 'xxxxxxxx@qq.com',
+    'recipient': 'xxxxxxxx@qq.com'
 }
 
 # 发送邮件函数
@@ -726,3 +726,4 @@ if __name__ == '__main__':
     # 使用socketio.run替代app.run
 
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+
