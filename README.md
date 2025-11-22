@@ -4,7 +4,7 @@
 
 ## ✨ 特色功能
 
-![TodoApp Logo](https://via.placeholder.com/600x200/4CAF50/ffffff?text=TodoApp-原生WebSocket跨平台同步)
+
 
 > 💡 **核心理念**：手机随时记录，电脑自动同步，再也不怕忘事儿和三分钟热度！
 
@@ -281,3 +281,4 @@ A: 修改 `email_service.py` 中的 `EMAIL_CONFIG` 配置即可。
 📧 有问题或建议？欢迎提交Issue或邮件联系我。
 
 🔄 **原生WebSocket，自动同步，永不忘记！** 🔄
+
