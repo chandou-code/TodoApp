@@ -20,10 +20,10 @@ TASK_CATEGORIES = ['任务', '想尝试', '提醒']
 EMAIL_CONFIG = {
     'smtp_server': 'smtp.qq.com',
     'port': 587,
-    'username': '1071718696@qq.com',
-    'password': 'czxzcmubbpelbcgh',
-    'sender': '1071718696@qq.com',
-    'recipient': '1071718696@qq.com'
+    'username': 'xxxxxx@qq.com',
+    'password': 'xxxxxx',
+    'sender': 'xxxxxx@qq.com',
+    'recipient': 'xxxxxx@qq.com'
 }
 
 
@@ -236,3 +236,4 @@ class EmailService:
         if self.scheduler:
             self.scheduler.shutdown()
             print("邮件服务已停止")
+
