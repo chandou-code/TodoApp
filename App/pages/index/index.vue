@@ -84,14 +84,14 @@
 		
 		<!-- 手动同步按钮组 -->
 		<view class="sync-buttons">
-			<view class="sync-btn pull-btn" @click="pullFromServer">
-				<text class="sync-btn-icon">↓</text>
-				<text class="sync-btn-text">拉取数据</text>
-			</view>
-			<view class="sync-btn push-btn" @click="pushToServer">
-				<text class="sync-btn-icon">↑</text>
-				<text class="sync-btn-text">手动同步</text>
-			</view>
+		<view class="sync-btn pull-btn" @click="pullFromServer" @tap="pullFromServer">
+			<text class="sync-btn-icon">↓</text>
+			<text class="sync-btn-text">拉取数据</text>
+		</view>
+		<view class="sync-btn push-btn" @click="pushToServer">
+			<text class="sync-btn-icon">↑</text>
+			<text class="sync-btn-text">手动同步</text>
+		</view>
 		</view>
 		
 		<!-- 添加/编辑任务弹窗 -->
@@ -147,9 +147,11 @@ export default {
 					content: '',
 					category: '任务'
 				},
-				// WebSocket相关状态
-				wsConnected: false,
-				// 请求ID映射，用于处理响应
+			// WebSocket相关状态
+			wsConnected: false,
+			// 待同步的任务列表
+			pendingSyncTasks: [],
+			// 请求ID映射，用于处理响应
 				pendingRequests: {}
 			}
 		},
@@ -189,25 +191,26 @@ export default {
 			let wsUrl;
 			
 			// 根据平台选择连接方式
-			// #ifdef H5
-			const hostname = window.location.hostname;
-			wsUrl = `http://${hostname}:5000`;
+		// #ifdef H5
+		// H5环境下也使用原生 WebSocket
+		const hostname = window.location.hostname;
+		wsUrl = `ws://${hostname}:5001`;
+		
+		console.log('H5环境，连接原生WebSocket服务器:', wsUrl);
+		
+		// 初始化WebSocket连接
+		websocketManager.init(wsUrl);
+		// #endif
 			
-			console.log('尝试连接Socket.IO服务器:', wsUrl);
-			
-			// 初始化WebSocket连接
-			websocketManager.init(wsUrl);
-			// #endif
-			
-			// #ifndef H5
-			// 在 App 环境下使用 HTTP 地址（websocketManager 会自动转换为 Socket.IO 格式）
-			wsUrl = 'http://192.168.1.7:5000';
-			
-			console.log('App环境，连接Socket.IO服务器:', wsUrl);
-			
-			// 初始化WebSocket连接
-			websocketManager.init(wsUrl);
-			// #endif
+		// #ifndef H5
+		// 在 App 环境下使用原生 WebSocket 地址
+		wsUrl = 'ws://192.168.1.7:5001';
+		
+		console.log('App环境，连接原生WebSocket服务器:', wsUrl);
+		
+		// 初始化WebSocket连接
+		websocketManager.init(wsUrl);
+		// #endif
 				
 				// 添加事件监听器
 				websocketManager.on('connected', this.handleWsConnected);
@@ -217,16 +220,23 @@ export default {
 				websocketManager.on('task_updated', this.handleTaskUpdated);
 				websocketManager.on('task_deleted', this.handleTaskDeleted);
 				websocketManager.on('task_completed_updated', this.handleTaskCompletedUpdated);
-				websocketManager.on('sync_completed', this.handleSyncCompleted);
-				websocketManager.on('error', this.handleWsError);
+		websocketManager.on('sync_completed', this.handleSyncCompleted);
+		websocketManager.on('all_tasks_cleared', this.handleTasksCleared);
+		websocketManager.on('error', this.handleWsError);
 			},
 			
-			// 处理WebSocket连接成功
-			handleWsConnected() {
-				console.log('WebSocket连接成功');
-				this.wsConnected = true;
-				this.onlineStatus = 'online';
-			},
+		// 处理WebSocket连接成功
+		handleWsConnected(data) {
+			console.log('WebSocket连接成功:', data);
+			this.wsConnected = true;
+			this.onlineStatus = 'online';
+			
+			// 连接成功后，立即发送一个测试消息
+			setTimeout(() => {
+				console.log('发送心跳测试消息');
+				websocketManager.send('ping');
+			}, 1000);
+		},
 			
 			// 处理WebSocket连接断开
 			handleWsDisconnected() {
@@ -366,11 +376,43 @@ export default {
 				this.saveLocalTasks();
 			},
 			
-			// 处理WebSocket错误
-			handleWsError(error) {
-				console.error('WebSocket错误:', error);
-				// 同步状态管理已改为在线状态管理
-			},
+		// 处理WebSocket错误
+		handleWsError(error) {
+			console.error('WebSocket错误:', error);
+			// 同步状态管理已改为在线状态管理
+		},
+		
+		// 处理任务清空完成
+		handleTasksCleared() {
+			console.log('服务器任务清空完成，开始同步本地任务');
+			
+			if (this.pendingSyncTasks.length > 0) {
+				// 有任务时批量发送
+				this.pendingSyncTasks.forEach((task, index) => {
+					setTimeout(() => {
+						const taskToSend = {
+							title: task.title,
+							content: task.content,
+							category: task.category,
+							completed: task.completed
+						};
+						
+						// 统一使用创建任务，避免ID冲突
+						websocketManager.send('create_task', { task: taskToSend });
+						
+						// 最后一个任务
+						if (index === this.pendingSyncTasks.length - 1) {
+							this.completeSync();
+						}
+					}, index * 100); // 每个任务间隔100ms发送
+				});
+			} else {
+				// 没有任务时直接完成同步
+				setTimeout(() => {
+					this.completeSync();
+				}, 500);
+			}
+		},
 			
 			// 生成请求ID
 			generateRequestId() {
@@ -405,74 +447,54 @@ export default {
 						});
 					}
 				}, 10000);
-			},
+		},
+		
+		// 手动同步到服务器 - 完全替换模式
+		pushToServer() {
+			console.log('=== 手动同步按钮被点击 ===');
+			console.log('WebSocket连接状态:', this.wsConnected);
+			console.log('在线状态:', this.onlineStatus);
+			console.log('当前任务列表:', this.tasks);
 			
-			// 手动同步到服务器 - 完全替换模式
-			pushToServer() {
-				if (!this.wsConnected) {
-					uni.showToast({
-						title: '未连接到服务器',
-						icon: 'none'
-					});
-					return;
-				}
-				
-				if (this.tasks.length === 0) {
-					uni.showToast({
-						title: '没有任务可以同步',
-						icon: 'success'
-					});
-					return;
-				}
-				
-				this.onlineStatus = 'connecting';
-				uni.showLoading({ title: '同步数据中...' });
-				
-				// 先清空服务器上的所有数据
-				websocketManager.send('clear_all_tasks');
-				
-				// 然后批量发送本地所有任务
-				this.tasks.forEach((task, index) => {
-					setTimeout(() => {
-						const taskToSend = {
-							title: task.title,
-							content: task.content,
-							category: task.category,
-							completed: task.completed
-						};
-						
-						if (task.id && task.id.startsWith('temp_')) {
-							// 临时任务，创建新任务
-							websocketManager.send('create_task', { task: taskToSend });
-						} else {
-							// 已有ID的任务，更新任务
-							websocketManager.send('update_task', {
-								id: task.id,
-								task: taskToSend
-							});
-						}
-						
-						// 最后一个任务
-						if (index === this.tasks.length - 1) {
-							setTimeout(() => {
-								uni.hideLoading();
-								uni.showToast({
-									title: '同步完成',
-									icon: 'success'
-								});
-								this.onlineStatus = 'online';
-								
-								// 标记所有任务为已同步
-								this.tasks = this.tasks.map(task => ({
-									...task,
-									needsSync: false
-								}));
-								this.saveLocalTasks();
-							}, 1000);
-						}
-					}, index * 100); // 每个任务间隔100ms发送
+			if (!this.wsConnected) {
+				console.log('WebSocket未连接，显示提示');
+				uni.showToast({
+					title: '未连接到服务器',
+					icon: 'none'
 				});
-			},
+				return;
+			}
+			
+			// 即使没有任务也要同步，以清空服务器数据
+			this.onlineStatus = 'connecting';
+			uni.showLoading({ title: '同步数据中...' });
+			
+			// 设置同步任务列表
+			this.pendingSyncTasks = [...this.tasks];
+			console.log('设置待同步任务列表:', this.pendingSyncTasks);
+			
+			// 先清空服务器上的所有数据
+			console.log('发送清空服务器请求...');
+			const result = websocketManager.send('clear_all_tasks');
+			console.log('send方法返回结果:', result);
+		},
+		
+		// 完成同步操作
+		completeSync() {
+			uni.hideLoading();
+			uni.showToast({
+				title: '同步完成',
+				icon: 'success'
+			});
+			this.onlineStatus = 'online';
+			
+			// 标记所有任务为已同步
+			this.tasks = this.tasks.map(task => ({
+				...task,
+				needsSync: false
+			}));
+			this.saveLocalTasks();
+		},
 			
 			// 从本地存储加载任务 - 增强的持久化实现
 			loadLocalTasks() {

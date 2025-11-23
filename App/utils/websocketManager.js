@@ -48,125 +48,12 @@ class WebSocketManager {
 
       console.log('尝试连接WebSocket服务器:', this.url);
       
-      if (this.isH5) {
-        // H5环境：尝试使用Socket.IO客户端
-        this.connectSocketIO();
-      } else {
-        // 非H5环境：使用原生WebSocket
-        this.connectNativeWebSocket();
-      }
+      // 直接使用原生WebSocket连接
+      this.connectNativeWebSocket();
     } catch (e) {
       console.error('创建WebSocket连接失败:', e);
       this.handleReconnect();
     }
-  }
-
-  /**
-   * 使用Socket.IO客户端连接（H5环境）
-   */
-  connectSocketIO() {
-    try {
-      // 动态加载Socket.IO客户端库
-      if (typeof io === 'undefined') {
-        this.loadSocketIOScript(() => {
-          this.initSocketIOConnection();
-        });
-      } else {
-        this.initSocketIOConnection();
-      }
-    } catch (e) {
-      console.error('Socket.IO连接失败:', e);
-      this.fallbackToNativeWebSocket();
-    }
-  }
-
-  /**
-   * 加载Socket.IO客户端库
-   */
-  loadSocketIOScript(callback) {
-    // #ifdef H5
-    const script = document.createElement('script');
-    script.src = 'https://cdn.socket.io/4.7.2/socket.io.min.js';
-    script.onload = callback;
-    script.onerror = () => {
-      console.error('加载Socket.IO客户端库失败，回退到原生WebSocket');
-      this.fallbackToNativeWebSocket();
-    };
-    document.head.appendChild(script);
-    // #endif
-    
-    // #ifndef H5
-    // App 环境下不支持动态加载脚本，直接使用原生WebSocket
-    console.log('App环境，使用原生WebSocket');
-    this.fallbackToNativeWebSocket();
-    // #endif
-  }
-
-  /**
-   * 初始化Socket.IO连接
-   */
-  initSocketIOConnection() {
-    try {
-      this.socket = io(this.url, {
-        transports: ['websocket', 'polling'],
-        timeout: 5000,
-        forceNew: true
-      });
-
-      this.socket.on('connect', () => {
-        console.log('Socket.IO连接已建立');
-        this.isConnected = true;
-        this.emit('connected', { message: '连接成功' });
-        this.startHeartbeat();
-        this.flushMessageQueue();
-      });
-
-      this.socket.on('disconnect', () => {
-        console.log('Socket.IO连接已断开');
-        this.isConnected = false;
-        this.emit('disconnected', { message: '连接已断开' });
-        this.stopHeartbeat();
-        this.handleReconnect();
-      });
-
-      this.socket.on('connect_error', (err) => {
-        console.error('Socket.IO连接错误:', err);
-        this.isConnected = false;
-        this.emit('error', { error: err.message });
-        this.handleReconnect();
-      });
-
-      // 监听Socket.IO事件
-      this.setupSocketIOEvents();
-    } catch (e) {
-      console.error('初始化Socket.IO连接失败:', e);
-      this.fallbackToNativeWebSocket();
-    }
-  }
-
-  /**
-   * 设置Socket.IO事件监听
-   */
-  setupSocketIOEvents() {
-    const events = [
-      'tasks_data', 'task_created', 'task_updated', 
-      'task_deleted', 'task_completed_updated', 
-      'sync_completed', 'error', 'sync_notification', 'pong'
-    ];
-
-    events.forEach(event => {
-      this.socket.on(event, (data) => {
-        this.emit(event, data);
-      });
-    });
-  }
-
-  /**
-   * 回退到原生WebSocket
-   */
-  fallbackToNativeWebSocket() {
-    console.log('回退到原生WebSocket');
-    this.connectNativeWebSocket();
   }
 
   /**
@@ -233,9 +120,16 @@ class WebSocketManager {
     this.socket.onOpen(() => {
       console.log('WebSocket连接已建立');
       this.isConnected = true;
+      this.wsConnected = true; // 添加额外的连接状态标志
       this.emit('connected', { message: '连接成功' });
       this.startHeartbeat();
       this.flushMessageQueue();
+      
+      // 连接成功后发送测试消息
+      setTimeout(() => {
+        console.log('发送连接测试ping');
+        this.send('ping');
+      }, 1000);
     });
 
     // 监听消息接收
@@ -291,11 +185,16 @@ class WebSocketManager {
    * @param {string} requestId - 请求ID（可选）
    */
   send(type, payload = {}, requestId = null) {
-    if (this.isH5 && this.socket && this.socket.io) {
-      // Socket.IO发送
-      this.socket.emit(type, payload, requestId ? requestId : null);
-      console.log('Socket.IO消息发送成功:', type);
-    } else if (this.socket) {
+    console.log('尝试发送消息:', type, payload, requestId);
+    console.log('WebSocket状态检查:', {
+      isH5: this.isH5,
+      socket: this.socket,
+      isConnected: this.isConnected,
+      readyState: this.socket ? (this.socket.readyState || 'unknown') : 'no_socket'
+    });
+    
+    // 强制使用原生WebSocket，不使用Socket.IO
+    if (this.socket) {
       // 原生WebSocket发送
       const message = {
         type,
@@ -303,7 +202,11 @@ class WebSocketManager {
         requestId
       };
 
-      if (this.isConnected && this.socket.send) {
+      // 检查WebSocket连接状态
+      const isSocketReady = this.socket.readyState === 1 || // WebSocket.OPEN
+                               (typeof this.socket.readyState === 'undefined' && this.isConnected); // App环境
+      
+      if (isSocketReady && this.socket.send) {
         const messageStr = JSON.stringify(message);
         
         // #ifdef H5
@@ -319,12 +222,13 @@ class WebSocketManager {
           },
           fail: (err) => {
             console.error('WebSocket消息发送失败:', err);
-            this.queueMessage(message);
+            // 不加入队列，避免重复发送
           }
         });
         // #endif
       } else {
-        console.log('WebSocket未连接，将消息加入队列');
+        console.log('WebSocket未连接或未就绪，将消息加入队列');
+        console.log('readyState:', this.socket.readyState, 'isConnected:', this.isConnected);
         this.queueMessage(message);
       }
     } else {
@@ -349,45 +253,9 @@ class WebSocketManager {
       return;
     }
 
-    const sendNext = () => {
-      if (this.messageQueue.length === 0 || !this.isConnected) {
-        return;
-      }
-
-      const message = this.messageQueue.shift();
-      
-      if (this.isH5 && this.socket && this.socket.io) {
-        // Socket.IO发送队列消息
-        this.socket.emit(message.type, message.payload, message.requestId);
-        console.log('队列消息发送成功:', message.type);
-        sendNext();
-      } else if (this.socket && this.socket.send) {
-        // 原生WebSocket发送队列消息
-        const messageStr = JSON.stringify(message);
-        
-        // #ifdef H5
-        this.socket.send(messageStr);
-        console.log('队列消息发送成功:', message.type);
-        sendNext();
-        // #endif
-        
-        // #ifndef H5
-        this.socket.send({
-          data: messageStr,
-          success: () => {
-            console.log('队列消息发送成功:', message.type);
-            sendNext();
-          },
-          fail: (err) => {
-            console.error('队列消息发送失败:', err);
-            this.messageQueue.unshift(message);
-          }
-        });
-        // #endif
-      }
-    };
-
-    sendNext();
+    // 清空队列，避免重复发送
+    console.log(`清空消息队列，丢弃${this.messageQueue.length}条消息`);
+    this.messageQueue = [];
   }
 
   /**
@@ -484,14 +352,9 @@ class WebSocketManager {
       this.reconnectTimer = null;
     }
     
-    if (this.socket) {
-      if (this.isH5 && this.socket.io) {
-        // Socket.IO关闭
-        this.socket.disconnect();
-      } else if (this.socket.close) {
-        // 原生WebSocket关闭
-        this.socket.close();
-      }
+    if (this.socket && this.socket.close) {
+      // 原生WebSocket关闭
+      this.socket.close();
       this.socket = null;
     }
     

@@ -3,29 +3,20 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import os
-from flask_socketio import SocketIO, emit, join_room
 import json
-import eventlet
 import threading
 import time
 import base64
 import hashlib
 from email_service import EmailService
-
-# 替换标准库的线程实现，以支持SocketIO的异步功能
-eventlet.monkey_patch()
+# 导入备份模块
+from backup import init_app as init_backup, auto_backup
 
 app = Flask(__name__)
 CORS(app)  # 启用CORS支持所有域名的请求
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///task_manager.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
-
-# 初始化SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
-
-# 存储连接的客户端
-connected_clients = set()
 
 
 # 简单的WebSocket服务器类
@@ -44,6 +35,25 @@ class SimpleWebSocketServer:
     def remove_client(self, websocket):
         self.clients.discard(websocket)
         print(f'WebSocket客户端已断开: {len(self.clients)} 个客户端')
+
+    def broadcast_to_all(self, message):
+        """向所有连接的客户端广播消息"""
+        if not self.clients:
+            return
+        
+        message_str = json.dumps(message)
+        dead_clients = set()
+        
+        for client_socket in self.clients:
+            try:
+                self.send_to_client(client_socket, message_str, is_string=True)
+            except Exception as e:
+                print(f'广播消息失败: {e}')
+                dead_clients.add(client_socket)
+        
+        # 清理死连接
+        for client in dead_clients:
+            self.remove_client(client)
 
     def start(self):
         """启动WebSocket服务器线程"""
@@ -216,15 +226,27 @@ class SimpleWebSocketServer:
                         )
                         db.session.add(new_task)
                         db.session.commit()
+                        task_data = new_task.to_dict()
 
+                        # 广播任务创建通知给所有客户端
+                        broadcast_message = {
+                            'type': 'sync_notification',
+                            'data': {
+                                'action': 'create',
+                                'task': task_data
+                            }
+                        }
+                        self.broadcast_to_all(broadcast_message)
+
+                        # 发送创建响应给请求客户端
                         response = {
                             'type': 'task_created',
                             'data': {
-                                'task': new_task.to_dict(),
+                                'task': task_data,
                                 'requestId': request_id
                             }
                         }
-                        print(f'发送创建任务响应，requestId: {request_id}, task: {new_task.to_dict()}')
+                        print(f'发送创建任务响应，requestId: {request_id}, task: {task_data}')
                         self.send_to_client(client_socket, response)
 
                 elif event_type == 'update_task':
@@ -233,24 +255,39 @@ class SimpleWebSocketServer:
                     if task_id:
                         task = Task.query.get(task_id)
                         if task:
-                            if 'content' in payload:
-                                task.content = payload['content']
-                            if 'title' in payload:
-                                task.title = payload['title']
-                            if 'category' in payload:
-                                task.category = payload['category']
-                            if 'completed' in payload:
-                                task.completed = payload['completed']
-                                if payload['completed']:
+                            # 从payload中获取任务数据
+                            task_data = payload.get('task', payload)
+                            
+                            if 'content' in task_data:
+                                task.content = task_data['content']
+                            if 'title' in task_data:
+                                task.title = task_data['title']
+                            if 'category' in task_data:
+                                task.category = task_data['category']
+                            if 'completed' in task_data:
+                                task.completed = task_data['completed']
+                                if task_data['completed']:
                                     task.completed_at = datetime.utcnow()
                                 else:
                                     task.completed_at = None
                             db.session.commit()
+                            updated_task_data = task.to_dict()
 
+                            # 广播任务更新通知给所有客户端
+                            broadcast_message = {
+                                'type': 'sync_notification',
+                                'data': {
+                                    'action': 'update',
+                                    'task': updated_task_data
+                                }
+                            }
+                            self.broadcast_to_all(broadcast_message)
+
+                            # 发送更新响应给请求客户端
                             response = {
                                 'type': 'task_updated',
                                 'data': {
-                                    'task': task.to_dict(),
+                                    'task': updated_task_data,
                                     'requestId': data.get('requestId')
                                 }
                             }
@@ -336,10 +373,13 @@ class SimpleWebSocketServer:
                 }
                 self.send_to_client(client_socket, error_response)
 
-    def send_to_client(self, client_socket, message):
+    def send_to_client(self, client_socket, message, is_string=False):
         """向特定客户端发送消息"""
         try:
-            json_message = json.dumps(message)
+            if not is_string:
+                json_message = json.dumps(message)
+            else:
+                json_message = message
             frame = self.create_websocket_frame(json_message)
             client_socket.send(frame)
         except Exception as e:
@@ -619,397 +659,30 @@ def send_test_email():
         return jsonify({'error': f'发送失败: {str(e)}'}), 500
 
 
-# WebSocket事件处理
-
-@socketio.on('connect')
-def handle_connect():
-    """处理客户端连接"""
-    client_id = request.sid
-    connected_clients.add(client_id)
-    print(f'客户端已连接: {client_id}')
-    # 发送连接成功消息
-    emit('connected', {'message': '连接成功'})
-
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """处理客户端断开连接"""
-    client_id = request.sid
-    if client_id in connected_clients:
-        connected_clients.remove(client_id)
-        print(f'客户端已断开: {client_id}')
-
-
-@socketio.on('fetch_tasks')
-def handle_fetch_tasks(*args):
-    """处理获取任务列表请求"""
-    print(f'收到 fetch_tasks 事件，参数: {args}')
-    try:
-        # 解析参数（args 可能包含数据）
-        data = args[0] if args and isinstance(args[0], dict) else {}
-        category = data.get('category')
-        completed = data.get('completed')
-
-        query = Task.query
-
-        if category and category in TASK_CATEGORIES:
-            query = query.filter_by(category=category)
-
-        if completed is not None:
-            query = query.filter_by(completed=completed)
-
-        tasks = query.order_by(Task.created_at.desc()).all()
-        tasks_data = [task.to_dict() for task in tasks]
-
-        emit('tasks_data', {'tasks': tasks_data})
-    except Exception as e:
-        print(f'获取任务失败: {str(e)}')
-        emit('error', {'code': 'FETCH_ERROR', 'message': f'获取任务失败: {str(e)}'})
-
-
-@socketio.on('create_task')
-def handle_create_task(*args):
-    """处理创建任务请求"""
-    print(f'收到 create_task 事件，参数: {args}')
-    try:
-        data = args[0] if args and isinstance(args[0], dict) else {}
-
-        # 检查是否有嵌套的任务数据
-        task_data = data.get('task', data)
-        temp_id = data.get('tempId', task_data.get('tempId'))
-
-        if 'content' not in task_data or not task_data['content'].strip():
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '内容是必填项'})
-            return
-
-        category = task_data.get('category', '任务')
-        if category not in TASK_CATEGORIES:
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '无效的分类'})
-            return
-
-        new_task = Task(
-            title=task_data.get('title'),
-            content=task_data['content'],
-            category=category,
-            completed=task_data.get('completed', False)
-        )
-
-        db.session.add(new_task)
-        db.session.commit()
-
-        task_data = new_task.to_dict()
-        # 通知所有客户端有新任务创建
-        socketio.emit('sync_notification', {
-            'action': 'create',
-            'task': task_data
-        })
-
-        # 回复请求客户端
-        print(f'任务创建成功: {new_task.id}, tempId: {temp_id}')
-        response = {'task': task_data, 'tempId': temp_id}
-        emit('task_created', response)
-    except Exception as e:
-        print(f'创建任务失败: {str(e)}')
-        emit('error', {'code': 'CREATE_ERROR', 'message': f'创建任务失败: {str(e)}'})
-        db.session.rollback()
-
-
-@socketio.on('update_task')
-def handle_update_task(*args):
-    """处理更新任务请求"""
-    print(f'收到 update_task 事件，参数: {args}')
-    try:
-        # args 格式: [data, requestId]
-        data = args[0] if args and isinstance(args[0], dict) else {}
-        request_id = args[1] if len(args) > 1 else None
-
-        task_id = data.get('id')
-
-        if not task_id:
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '任务ID不能为空'})
-            return
-
-        # 如果是临时ID，跳过更新
-        if task_id.startswith('temp_'):
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '不能使用临时ID更新任务'})
-            return
-
-        task = Task.query.get(task_id)
-        if not task:
-            emit('error', {'code': 'NOT_FOUND', 'message': '任务不存在'})
-            return
-
-        # 检查是否有嵌套的任务数据
-        task_data = data.get('task', data)
-
-        if 'content' in task_data:
-            task.content = task_data['content']
-        if 'title' in task_data:
-            task.title = task_data['title']
-        if 'category' in task_data:
-            if task_data['category'] not in TASK_CATEGORIES:
-                emit('error', {'code': 'VALIDATION_ERROR', 'message': '无效的分类'})
-                return
-            task.category = task_data['category']
-        if 'completed' in task_data:
-            task.completed = task_data['completed']
-            if task_data['completed']:
-                task.completed_at = datetime.utcnow()
-            else:
-                task.completed_at = None
-
-        db.session.commit()
-        updated_task_data = task.to_dict()
-
-        # 通知所有客户端任务已更新
-        socketio.emit('sync_notification', {
-            'action': 'update',
-            'task': updated_task_data
-        })
-
-        # 回复请求客户端（包含 requestId）
-        print(f'任务更新成功: {task_id}')
-        response = {'task': updated_task_data}
-        if request_id:
-            response['requestId'] = request_id
-        emit('task_updated', response)
-    except Exception as e:
-        print(f'更新任务失败: {str(e)}')
-        emit('error', {'code': 'UPDATE_ERROR', 'message': f'更新任务失败: {str(e)}'})
-        db.session.rollback()
-
-
-@socketio.on('delete_task')
-def handle_delete_task(*args):
-    """处理删除任务请求"""
-    try:
-        data = args[0] if args and isinstance(args[0], dict) else {}
-        task_id = data.get('id')
-        if not task_id:
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '任务ID不能为空'})
-            return
-
-        # 移除temp_前缀
-        if task_id.startswith('temp_'):
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '不能删除临时任务'})
-            return
-
-        task = Task.query.get(task_id)
-        if not task:
-            emit('error', {'code': 'NOT_FOUND', 'message': '任务不存在'})
-            return
-
-        db.session.delete(task)
-        db.session.commit()
-
-        # 通知所有客户端任务已删除
-        socketio.emit('sync_notification', {
-            'action': 'delete',
-            'task': {'id': task_id}
-        })
-
-        # 回复请求客户端（包含 requestId）
-        print(f'任务删除成功: {task_id}')
-        response = {'id': task_id}
-        if len(args) > 1:
-            response['requestId'] = args[1]
-        emit('task_deleted', response)
-    except Exception as e:
-        print(f'删除任务失败: {str(e)}')
-        emit('error', {'code': 'DELETE_ERROR', 'message': f'删除任务失败: {str(e)}'})
-        db.session.rollback()
-
-
-@socketio.on('toggle_complete')
-def handle_toggle_complete(*args):
-    """处理切换任务完成状态请求"""
-    try:
-        data = args[0] if args and isinstance(args[0], dict) else {}
-        task_id = data.get('id')
-        completed = data.get('completed', False)
-
-        if not task_id:
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '任务ID不能为空'})
-            return
-
-        # 移除temp_前缀
-        if task_id.startswith('temp_'):
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '不能操作临时任务'})
-            return
-
-        task = Task.query.get(task_id)
-        if not task:
-            emit('error', {'code': 'NOT_FOUND', 'message': '任务不存在'})
-            return
-
-        task.completed = completed
-        if completed:
-            task.completed_at = datetime.utcnow()
-        else:
-            task.completed_at = None
-
-        db.session.commit()
-        task_data = task.to_dict()
-
-        # 通知所有客户端任务状态已更新
-        socketio.emit('sync_notification', {
-            'action': 'update',
-            'task': task_data
-        })
-
-        # 回复请求客户端
-        emit('task_updated', {'task': task_data})
-    except Exception as e:
-        print(f'更新任务状态失败: {str(e)}')
-        emit('error', {'code': 'STATUS_ERROR', 'message': f'更新任务状态失败: {str(e)}'})
-        db.session.rollback()
-
-
-@socketio.on('update_task_completed')
-def handle_update_task_completed(*args):
-    """处理更新任务完成状态请求（前端专用事件名）"""
-    print(f'收到 update_task_completed 事件，参数: {args}')
-    try:
-        data = args[0] if args and isinstance(args[0], dict) else {}
-        task_id = data.get('id')
-        completed = data.get('completed', False)
-
-        if not task_id:
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '任务ID不能为空'})
-            return
-
-        # 移除temp_前缀
-        if task_id.startswith('temp_'):
-            emit('error', {'code': 'VALIDATION_ERROR', 'message': '不能使用临时ID更新任务状态'})
-            return
-
-        task = Task.query.get(task_id)
-        if not task:
-            emit('error', {'code': 'NOT_FOUND', 'message': '任务不存在'})
-            return
-
-        task.completed = completed
-        if completed:
-            task.completed_at = datetime.utcnow()
-        else:
-            task.completed_at = None
-
-        db.session.commit()
-        task_data = task.to_dict()
-
-        # 通知所有客户端任务状态已更新
-        socketio.emit('sync_notification', {
-            'action': 'update',
-            'task': task_data
-        })
-
-        # 回复请求客户端
-        print(f'任务完成状态更新成功: {task_id}, completed: {completed}')
-        response = {'id': task_id}
-        if len(args) > 1:
-            response['requestId'] = args[1]
-        emit('task_completed_updated', response)
-    except Exception as e:
-        print(f'更新任务完成状态失败: {str(e)}')
-        emit('error', {'code': 'STATUS_ERROR', 'message': f'更新任务状态失败: {str(e)}'})
-        db.session.rollback()
-
-
-@socketio.on('sync_tasks')
-def handle_sync_tasks(*args):
-    """处理批量同步任务请求"""
-    try:
-        data = args[0] if args and isinstance(args[0], dict) else {}
-        tasks = data.get('tasks', [])
-        synced_tasks = []
-        errors = []
-
-        for task in tasks:
-            try:
-                task_id = task.get('id')
-                # 处理临时ID的任务（创建新任务）
-                if task_id and task_id.startswith('temp_'):
-                    new_task = Task(
-                        title=task.get('title'),
-                        content=task.get('content'),
-                        category=task.get('category', '任务'),
-                        completed=task.get('completed', False)
-                    )
-                    if new_task.completed:
-                        new_task.completed_at = datetime.utcnow()
-                    db.session.add(new_task)
-                    db.session.commit()
-
-                    new_task_data = new_task.to_dict()
-                    new_task_data['tempId'] = task_id
-                    synced_tasks.append(new_task_data)
-
-                    # 通知所有客户端
-                    socketio.emit('sync_notification', {
-                        'action': 'create',
-                        'task': new_task_data
-                    })
-                else:
-                    # 更新已有任务
-                    existing_task = Task.query.get(task_id)
-                    if existing_task:
-                        if 'content' in task:
-                            existing_task.content = task['content']
-                        if 'title' in task:
-                            existing_task.title = task['title']
-                        if 'category' in task:
-                            existing_task.category = task['category']
-                        if 'completed' in task:
-                            existing_task.completed = task['completed']
-                            if task['completed']:
-                                existing_task.completed_at = datetime.utcnow()
-                            else:
-                                existing_task.completed_at = None
-
-                        db.session.commit()
-                        updated_task_data = existing_task.to_dict()
-                        synced_tasks.append(updated_task_data)
-
-                        # 通知所有客户端
-                        socketio.emit('sync_notification', {
-                            'action': 'update',
-                            'task': updated_task_data
-                        })
-            except Exception as e:
-                errors.append({'taskId': task.get('id'), 'error': str(e)})
-
-        # 回复同步结果
-        emit('sync_result', {
-            'success': len(errors) == 0,
-            'syncedTasks': synced_tasks,
-            'errors': errors
-        })
-    except Exception as e:
-        print(f'批量同步失败: {str(e)}')
-        emit('error', {'code': 'SYNC_ERROR', 'message': f'批量同步失败: {str(e)}'})
-
-
-@socketio.on('ping')
-def handle_ping(*args):
-    """处理心跳检测"""
-    print('收到心跳请求')
-    emit('pong')
-
-
 # 广播函数，用于在任务变更时通知所有客户端
 def broadcast_task_change(action, task_data):
-    """广播任务变更给所有连接的客户端"""
-    socketio.emit('sync_notification', {
-        'action': action,
-        'task': task_data
-    })
+    """通过原生WebSocket广播任务变更给所有连接的客户端"""
+    message = {
+        'type': 'sync_notification',
+        'data': {
+            'action': action,
+            'task': task_data
+        }
+    }
+    websocket_server.broadcast_to_all(message)
 
 
 # 启动应用
+# 初始化备份模块
+init_backup(app, db, Task)
+
 if __name__ == '__main__':
+    # 启动前自动备份数据库
+    auto_backup()
+    
     # 启动原生WebSocket服务器
     websocket_server.start()
     time.sleep(1)  # 等待WebSocket服务器启动
 
-    # 使用socketio.run替代app.run
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # 启动Flask应用（仅用于HTTP API）
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
