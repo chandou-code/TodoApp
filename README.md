@@ -4,7 +4,7 @@
 
 ## ✨ 特色功能
 
-![TodoApp Logo]([https://via.placeholder.com/600x200/4CAF50/ffffff?text=TodoApp-跨平台待办事项管理](https://github.com/chandou-code/TodoApp/blob/main/App/%E6%96%B0%E5%AF%B9%E8%AF%9D%20(2).png))
+![TodoApp Logo](https://github.com/chandou-code/TodoApp/blob/main/App/%E6%96%B0%E5%AF%B9%E8%AF%9D%20(2).png)
 
 > 💡 **核心理念**：手机随时记录，电脑自动同步，再也不怕忘事儿和三分钟热度！
 
@@ -255,3 +255,4 @@ A: 修改 `email_service.py` 中的 `EMAIL_CONFIG` 配置即可。
 
 
 🔄 **自动同步，永不忘记！** 🔄
+
